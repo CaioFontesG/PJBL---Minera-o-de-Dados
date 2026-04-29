@@ -1,6 +1,5 @@
 x-common: &common
   restart: unless-stopped
-  env_file: .env
   dns:
     - 8.8.8.8
     - 1.1.1.1
@@ -13,14 +12,14 @@ services:
     <<: *common
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_DB: ${POSTGRES_DB:-bgp_mining}
+      POSTGRES_USER: ${POSTGRES_USER:-bgp}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - pg_data:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bgp} -d ${POSTGRES_DB:-bgp_mining}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -44,6 +43,8 @@ services:
       dockerfile: scheduler/Dockerfile
     environment:
       REDIS_URL: redis://redis:6379/0
+      COLLECTION_INTERVAL_MINUTES: ${COLLECTION_INTERVAL_MINUTES:-60}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:
       postgres:
         condition: service_healthy
@@ -64,6 +65,14 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       POSTGRES_HOST: postgres
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DB: ${POSTGRES_DB:-bgp_mining}
+      POSTGRES_USER: ${POSTGRES_USER:-bgp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      HTTP_DELAY_SECONDS: ${HTTP_DELAY_SECONDS:-1}
+      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-30}
+      MAX_RETRIES: ${MAX_RETRIES:-5}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:
       postgres:
         condition: service_healthy
@@ -78,6 +87,12 @@ services:
       dockerfile: dashboard/Dockerfile
     environment:
       POSTGRES_HOST: postgres
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DB: ${POSTGRES_DB:-bgp_mining}
+      POSTGRES_USER: ${POSTGRES_USER:-bgp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-Acesso14}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     expose:
       - "8501"
     depends_on:
