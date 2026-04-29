@@ -1,5 +1,3 @@
-version: "3.9"
-
 x-common: &common
   restart: unless-stopped
   env_file: .env
@@ -80,8 +78,8 @@ services:
       dockerfile: dashboard/Dockerfile
     environment:
       POSTGRES_HOST: postgres
-    ports:
-      - "8501:8501"
+    expose:
+      - "8501"
     depends_on:
       postgres:
         condition: service_healthy
