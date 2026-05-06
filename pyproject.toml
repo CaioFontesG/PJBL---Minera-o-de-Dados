@@ -112,7 +112,3 @@ worker    = "python worker/worker.py"
 scheduler = "python scheduler/scheduler.py"
 dashboard = "streamlit run dashboard/app.py"
 dev       = "task dev-up && task dashboard"
-
-# ─── Pesquisa de mitigadores ─────────────────────────────────────────────────
-find-mitigators     = "python scripts/find_mitigators.py"
-find-mitigators-sql = "python scripts/find_mitigators.py --output sql"

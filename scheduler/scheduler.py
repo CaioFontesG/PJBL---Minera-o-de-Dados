@@ -56,7 +56,7 @@ def main() -> None:
         next_run_time=datetime.utcnow(),
     )
 
-    # Coleta RIPE — dispara todo hora no minuto configurado (COLLECTION_MINUTE)
+    # Coleta RIPE — dispara nos minutos configurados em COLLECTION_MINUTE
     scheduler.add_job(
         _enqueue_job,
         trigger=CronTrigger(minute=collection_minute),
@@ -70,7 +70,7 @@ def main() -> None:
     Path("/tmp/scheduler.pid").write_text(str(os.getpid()))
 
     logger.info(
-        "Scheduler iniciado. Coleta todo hora aos :%02d. Jobs: discover_mitigators (startup+semanal), ripe",
+        "Scheduler iniciado. Coleta nos minutos: %s. Jobs: discover_mitigators (startup+semanal), ripe",
         collection_minute,
     )
     try:

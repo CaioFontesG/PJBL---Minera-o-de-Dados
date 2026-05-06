@@ -21,8 +21,9 @@ class Settings:
     # Redis
     redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
-    # Coleta — minuto da hora em que a coleta é disparada (0–59)
-    collection_minute: int = int(os.getenv("COLLECTION_MINUTE", "0"))
+    # Coleta — minuto(s) da hora em que a coleta é disparada
+    # Aceita um ou mais valores separados por vírgula: "7", "7,37", "0,15,30,45"
+    collection_minute: str = os.getenv("COLLECTION_MINUTE", "0")
     http_delay_seconds: float = float(os.getenv("HTTP_DELAY_SECONDS", "1.0"))
     http_timeout_seconds: int = int(os.getenv("HTTP_TIMEOUT_SECONDS", "30"))
     max_retries: int = int(os.getenv("MAX_RETRIES", "5"))

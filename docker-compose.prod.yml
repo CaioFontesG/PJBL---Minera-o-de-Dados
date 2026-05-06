@@ -92,8 +92,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-bgp}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    ports:
-      - "8501:8501"
+    expose:
+      - "8501"
     depends_on:
       postgres:
         condition: service_healthy
@@ -101,6 +101,7 @@ services:
 networks:
   bgp_net:
     driver: bridge
+    internal: false
 
 volumes:
   pg_data:
