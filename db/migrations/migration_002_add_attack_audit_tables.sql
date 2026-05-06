@@ -4,7 +4,7 @@
 CREATE TABLE IF NOT EXISTS mitigation_snapshots (
     id                  BIGSERIAL PRIMARY KEY,
     source              VARCHAR(50) NOT NULL
-                            CHECK (source IN ('ripe', 'bgpview')),
+                            CHECK (source IN ('ripe')),
     collection_ts       TIMESTAMPTZ NOT NULL,
     prefix              CIDR NOT NULL,
     origin_asn          INTEGER NOT NULL,
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS mitigation_snapshots (
 CREATE TABLE IF NOT EXISTS ddos_attack_events (
     id                  BIGSERIAL PRIMARY KEY,
     source              VARCHAR(50) NOT NULL
-                            CHECK (source IN ('ripe', 'bgpview')),
+                            CHECK (source IN ('ripe')),
     prefix              CIDR NOT NULL,
     origin_asn          INTEGER NOT NULL,
     mitigator_asn       INTEGER,

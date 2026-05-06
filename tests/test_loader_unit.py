@@ -172,7 +172,7 @@ async def test_create_job_returns_id_from_db() -> None:
 
 async def test_create_job_returns_different_id() -> None:
     pool, conn = _make_pool(fetchrow_result={"id": 42})
-    job_id = await create_job(pool, "bgptools")
+    job_id = await create_job(pool, "ripe")
     assert job_id == 42
 
 

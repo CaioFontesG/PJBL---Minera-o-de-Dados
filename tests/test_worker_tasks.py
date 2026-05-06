@@ -50,18 +50,3 @@ def test_run_ripe_executes_collector(monkeypatch) -> None:
     tasks.run_ripe()
 
     assert marker["called"] is True
-
-
-def test_run_bgptools_executes_collector(monkeypatch) -> None:
-    marker = {"called": False}
-    _install_fake_collector(
-        monkeypatch,
-        module_name="collectors.bgptools.collector",
-        func_name="collect_bgptools",
-        marker=marker,
-    )
-    monkeypatch.setattr(tasks.asyncio, "run", _run_coro)
-
-    tasks.run_bgptools()
-
-    assert marker["called"] is True

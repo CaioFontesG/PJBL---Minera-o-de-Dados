@@ -50,7 +50,7 @@ def test_clean_route_rejects_non_slash24() -> None:
         "prefix": "8.8.8.0/23",
         "as_path": "64500 13335 15169",
         "communities": [],
-        "source": "bgpview",
+        "source": "ripe",
     }
 
     assert clean_route(raw, mitigators) is None
@@ -62,7 +62,7 @@ def test_clean_route_rejects_private_prefix() -> None:
         "prefix": "10.0.0.0/24",
         "as_path": "64500 13335 15169",
         "communities": [],
-        "source": "bgpview",
+        "source": "ripe",
     }
 
     assert clean_route(raw, mitigators) is None

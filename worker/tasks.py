@@ -21,15 +21,6 @@ def run_ripe() -> None:
     logger.info("Tarefa concluída: ripe")
 
 
-def run_bgptools() -> None:
-    """Executa o coletor bgp.tools."""
-    from collectors.bgptools.collector import collect_bgptools
-
-    logger.info("Iniciando tarefa: bgptools")
-    asyncio.run(collect_bgptools())
-    logger.info("Tarefa concluída: bgptools")
-
-
 def run_discover_mitigators() -> None:
     """Descobre e cadastra ASNs mitigadores a partir dos upstreams dos owners."""
     from pipeline.loader import get_pool

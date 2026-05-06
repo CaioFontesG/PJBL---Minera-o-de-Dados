@@ -4,10 +4,13 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/libs/*
 
-COPY dashboard/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir poetry && \
+    poetry config virtualenvs.create false
+
+COPY pyproject.toml .
+RUN poetry install --only=main,dashboard --no-root --no-interaction
 
 COPY dashboard/ ./dashboard/
 COPY shared/    ./shared/

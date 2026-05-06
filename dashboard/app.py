@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
+import re
 import sys
 
 import altair as alt
@@ -18,51 +18,11 @@ load_dotenv()
 
 st.set_page_config(
     page_title="BGP Mining",
-    page_icon="🌐",
+    page_icon=None,
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
-
-# ── Autenticação ──────────────────────────────────────────────────────────────
-
-_PASSWORD_HASH = hashlib.sha256(
-    os.getenv("DASHBOARD_PASSWORD", "Acesso14").encode()
-).hexdigest()
-
-
-def _check_password(entered: str) -> bool:
-    return hashlib.sha256(entered.encode()).hexdigest() == _PASSWORD_HASH
-
-
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-
-if not st.session_state.authenticated:
-    st.markdown(
-        """
-        <style>
-        section[data-testid="stMain"] > div { max-width: 400px; margin: 10vh auto; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.title("🌐 BGP Mining")
-    st.caption("Sistema de Monitoramento de Anúncios BGP — UNDB")
-    st.divider()
-
-    with st.form("login"):
-        senha = st.text_input("Senha", type="password", placeholder="Digite a senha de acesso")
-        entrar = st.form_submit_button("Entrar", type="primary", use_container_width=True)
-
-    if entrar:
-        if _check_password(senha):
-            st.session_state.authenticated = True
-            st.rerun()
-        else:
-            st.error("Senha incorreta.")
-
-    st.stop()
 
 st.markdown(
     """
@@ -118,39 +78,58 @@ except Exception as e:
     st.stop()
 
 
-# ── Lookup BGPView ────────────────────────────────────────────────────────────
+# ── Lookup ASN ───────────────────────────────────────────────────────────────
+
+_LOOKUP_UA = "bgp-mining UNDB research - caio.fontes.gondin@hotmail.com"
 
 
 def _lookup_asn(asn: int) -> dict:
+    # Tenta bgp.tools para extrair ownerid (CNPJ) — ASNs brasileiros
     try:
         resp = requests.get(
-            f"https://api.bgpview.io/asn/{asn}",
+            f"https://bgp.tools/as/{asn}",
             timeout=10,
-            headers={"User-Agent": "BGP-Mining-Dashboard/1.0"},
+            headers={"User-Agent": _LOOKUP_UA},
         )
-        if resp.status_code != 200:
-            return {}
-        data = resp.json().get("data", {})
+        if resp.status_code == 200:
+            match = re.search(r"ownerid:.*?>([\d./-]+)<", resp.text)
+            if match:
+                cnpj = re.sub(r"[.\-/]", "", match.group(1))
+                br = requests.get(
+                    f"https://brasilapi.com.br/api/cnpj/v1/{cnpj}",
+                    timeout=10,
+                    headers={"User-Agent": _LOOKUP_UA},
+                )
+                if br.status_code == 200:
+                    d = br.json()
+                    return {
+                        "name": d.get("razao_social") or d.get("nome_fantasia") or "",
+                        "country": "BR",
+                        "city": d.get("municipio") or "",
+                        "state": d.get("uf") or "",
+                    }
     except Exception:
-        return {}
+        pass
 
-    country = data.get("country_code") or ""
-    name = data.get("description_short") or data.get("name") or ""
-    city, state = _parse_address(data.get("owner_address", []), country)
-    return {"name": name, "country": country, "city": city, "state": state}
+    # Fallback: RIPE Stat — ASNs internacionais ou quando bgp.tools falhar
+    try:
+        resp = requests.get(
+            f"https://stat.ripe.net/data/as-overview/data.json?resource=AS{asn}",
+            timeout=10,
+            headers={"User-Agent": _LOOKUP_UA},
+        )
+        if resp.status_code == 200:
+            data = resp.json().get("data", {})
+            return {
+                "name": data.get("holder") or "",
+                "country": "",
+                "city": "",
+                "state": "",
+            }
+    except Exception:
+        pass
 
-
-def _parse_address(address: list, country_code: str) -> tuple[str, str]:
-    lines = [str(ln).strip() for ln in address if str(ln).strip()]
-    lines = [ln for ln in lines if ln.upper() != country_code.upper()]
-    if not lines:
-        return "", ""
-    state = ""
-    if len(lines[-1]) <= 3 and lines[-1].isalpha():
-        state = lines[-1].upper()
-        lines = lines[:-1]
-    city = lines[-1] if lines else ""
-    return city, state
+    return {}
 
 
 def _get_existing_asn(asn: int) -> dict | None:
@@ -169,9 +148,9 @@ def _get_existing_asn(asn: int) -> dict | None:
 
 # ── Header ────────────────────────────────────────────────────────────────────
 
-col_title, col_status, col_logout = st.columns([3, 1, 1])
+col_title, col_status = st.columns([4, 1])
 with col_title:
-    st.title("🌐 BGP Mining Dashboard")
+    st.title("BGP Mining Dashboard")
     st.caption("Monitoramento de anúncios BGP — detecção de mitigação DDoS")
 with col_status:
     last_job = query(
@@ -179,16 +158,9 @@ with col_status:
     )
     if not last_job.empty:
         status = last_job.iloc[0]["status"]
-        color = {"done": "🟢", "running": "🟡", "error": "🔴"}.get(status, "⚪")
-        st.metric("Última coleta", f"{color} {status}")
+        st.metric("Última coleta", status)
     else:
-        st.metric("Última coleta", "⚪ sem dados")
-with col_logout:
-    st.write("")
-    st.write("")
-    if st.button("Sair", use_container_width=True):
-        st.session_state.authenticated = False
-        st.rerun()
+        st.metric("Última coleta", "sem dados")
 
 
 # ── Auto Refresh ─────────────────────────────────────────────────────────────
@@ -226,13 +198,11 @@ if auto_refresh_enabled:
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
-tab_overview, tab_analysis, tab_routes, tab_events, tab_asns = st.tabs(
+tab_overview, tab_provider, tab_asns = st.tabs(
     [
-        "📊 Visão Geral",
-        "🔍 Análise BGP",
-        "🗂️ Rotas",
-        "🚨 Eventos",
-        "⚙️ Gerenciar ASNs",
+        "Visão Geral",
+        "Análise de Provedor",
+        "Cadastro de ASN",
     ]
 )
 
@@ -246,9 +216,9 @@ with tab_overview:
         SELECT
             COUNT(*)                                       AS total_rotas,
             COUNT(*) FILTER (WHERE is_mitigated)           AS mitigadas,
-            COUNT(DISTINCT prefix::text)                   AS prefixos_unicos,
-            COUNT(DISTINCT origin_asn)                     AS asns_origem,
-            (SELECT COUNT(*) FROM known_asns WHERE type = 'mitigator') AS mitigadores_ativos
+            COUNT(DISTINCT origin_asn)                     AS owners_ativos,
+            (SELECT COUNT(*) FROM known_asns WHERE type = 'owner')     AS owners_cadastrados,
+            (SELECT COUNT(*) FROM known_asns WHERE type = 'mitigator') AS mitigadores_cadastrados
         FROM bgp_routes
     """)
 
@@ -259,146 +229,16 @@ with tab_overview:
         pct = round(100 * mitig / total, 1) if total else 0.0
 
         k1, k2, k3, k4, k5 = st.columns(5)
-        k1.metric("Total de rotas", f"{total:,}")
+        k1.metric("Total de rotas coletadas", f"{total:,}")
         k2.metric("Rotas mitigadas", f"{mitig:,}", delta=f"{pct}%")
-        k3.metric("Prefixos únicos", f"{int(r.prefixos_unicos):,}")
-        k4.metric("ASNs de origem", int(r.asns_origem))
-        k5.metric("Mitigadores ativos", int(r.mitigadores_ativos))
+        k3.metric("Provedoras com dados", int(r.owners_ativos))
+        k4.metric("Provedoras cadastradas", int(r.owners_cadastrados))
+        k5.metric("Mitigadores conhecidos", int(r.mitigadores_cadastrados))
 
     st.divider()
 
-    # ── Gráficos principais ───────────────────────────────────────────────────
-    left, right = st.columns(2)
-
-    with left:
-        st.subheader("Mitigação por fonte")
-        df_src = query("""
-            SELECT
-                source,
-                COUNT(*) FILTER (WHERE is_mitigated)     AS mitigadas,
-                COUNT(*) FILTER (WHERE NOT is_mitigated) AS nao_mitigadas
-            FROM bgp_routes
-            GROUP BY source
-            ORDER BY source
-        """)
-        if not df_src.empty:
-            df_melt = df_src.melt("source", var_name="status", value_name="total")
-            chart = (
-                alt.Chart(df_melt)
-                .mark_bar()
-                .encode(
-                    x=alt.X("source:N", title="Fonte"),
-                    y=alt.Y("total:Q", title="Rotas"),
-                    color=alt.Color(
-                        "status:N",
-                        scale=alt.Scale(
-                            domain=["mitigadas", "nao_mitigadas"],
-                            range=["#ff4b4b", "#4b9fff"],
-                        ),
-                        legend=alt.Legend(title="Status"),
-                    ),
-                    tooltip=["source", "status", "total"],
-                )
-                .properties(height=260)
-            )
-            st.altair_chart(chart, use_container_width=True)
-        else:
-            st.info("Sem dados de coleta ainda.")
-
-    with right:
-        st.subheader("Top mitigadores")
-        df_mit = query("""
-            SELECT
-                COALESCE(k.name, 'AS' || r.mitigator_asn::text) AS mitigador,
-                COUNT(*) AS total
-            FROM bgp_routes r
-            LEFT JOIN known_asns k ON k.asn = r.mitigator_asn
-            WHERE r.is_mitigated AND r.mitigator_asn IS NOT NULL
-            GROUP BY mitigador
-            ORDER BY total DESC
-            LIMIT 8
-        """)
-        if not df_mit.empty:
-            chart = (
-                alt.Chart(df_mit)
-                .mark_bar(color="#ff4b4b")
-                .encode(
-                    x=alt.X("total:Q", title="Rotas"),
-                    y=alt.Y("mitigador:N", sort="-x", title=""),
-                    tooltip=["mitigador", "total"],
-                )
-                .properties(height=260)
-            )
-            st.altair_chart(chart, use_container_width=True)
-        else:
-            st.info("Sem rotas mitigadas registradas.")
-
-    st.divider()
-
-    # ── Série temporal ────────────────────────────────────────────────────────
-    st.subheader("Volume coletado por hora")
-    df_time = query("""
-        SELECT
-            DATE_TRUNC('hour', collected_at) AS hora,
-            source,
-            COUNT(*) AS total
-        FROM bgp_routes
-        GROUP BY hora, source
-        ORDER BY hora
-    """)
-
-    if not df_time.empty:
-        df_time["hora"] = pd.to_datetime(df_time["hora"])
-        chart = (
-            alt.Chart(df_time)
-            .mark_line(point=True)
-            .encode(
-                x=alt.X("hora:T", title="Hora"),
-                y=alt.Y("total:Q", title="Rotas"),
-                color=alt.Color("source:N", legend=alt.Legend(title="Fonte")),
-                tooltip=["hora:T", "source", "total"],
-            )
-            .properties(height=220)
-        )
-        st.altair_chart(chart, use_container_width=True)
-    else:
-        st.info("Sem dados de série temporal ainda.")
-
-    st.divider()
-
-    # ── Histórico de coletas ──────────────────────────────────────────────────
-    st.subheader("Histórico de coletas")
-    df_jobs = query("""
-        SELECT
-            id, source, status, started_at, finished_at, records_found,
-            ROUND(EXTRACT(EPOCH FROM (finished_at - started_at))::numeric, 1) AS duração_s,
-            error_msg
-        FROM collection_jobs
-        ORDER BY started_at DESC
-        LIMIT 20
-    """)
-
-    if not df_jobs.empty:
-
-        def _color_status(val: str) -> str:
-            return {
-                "done": "background-color:#d4edda",
-                "error": "background-color:#f8d7da",
-                "running": "background-color:#fff3cd",
-            }.get(val, "")
-
-        styled = df_jobs.style.map(_color_status, subset=["status"])
-        st.dataframe(styled, use_container_width=True, hide_index=True)
-    else:
-        st.info("Nenhum job registrado ainda.")
-
-
-# ============================================================================
-# Tab 2 — Análise BGP
-# ============================================================================
-with tab_analysis:
-    # ── % Mitigação por ASN owner ─────────────────────────────────────────────
-    st.subheader("Mitigação por ASN monitorado")
+    # ── Mitigação por provedora ───────────────────────────────────────────────
+    st.subheader("% de mitigação por provedora")
     df_owner_mit = query("""
         SELECT
             k.asn,
@@ -415,10 +255,11 @@ with tab_analysis:
         LEFT JOIN bgp_routes r ON r.origin_asn = k.asn
         WHERE k.type = 'owner'
         GROUP BY k.asn, k.name, k.city, k.state
+        HAVING COUNT(r.id) > 0
         ORDER BY pct_mitigacao DESC NULLS LAST
     """)
 
-    if not df_owner_mit.empty and df_owner_mit["total_rotas"].sum() > 0:
+    if not df_owner_mit.empty:
         col_chart, col_table = st.columns([2, 1])
 
         with col_chart:
@@ -455,7 +296,7 @@ with tab_analysis:
                     ["nome", "localidade", "total_rotas", "mitigadas", "pct_mitigacao"]
                 ].rename(
                     columns={
-                        "nome": "ASN",
+                        "nome": "Provedora",
                         "localidade": "Cidade/UF",
                         "total_rotas": "Total",
                         "mitigadas": "Mitigadas",
@@ -467,332 +308,420 @@ with tab_analysis:
                 height=360,
             )
     else:
-        st.info("Sem dados de rotas para os ASNs owners cadastrados.")
-        if not df_owner_mit.empty:
-            st.dataframe(
-                df_owner_mit[["nome", "localidade"]].rename(
-                    columns={"nome": "ASN", "localidade": "Cidade/UF"}
+        st.info("Sem dados de rotas para os ASNs cadastrados ainda.")
+
+    st.divider()
+
+    # ── Mapa de calor temporal ────────────────────────────────────────────────
+    st.subheader("Mapa de calor — mitigação por hora e dia da semana")
+    st.caption(
+        "Intensidade = % de rotas mitigadas naquele bloco de hora. Revela padrões temporais de ataques."
+    )
+    df_heatmap = query("""
+        SELECT
+            EXTRACT(DOW FROM collected_at)::int  AS dia,
+            EXTRACT(HOUR FROM collected_at)::int AS hora,
+            ROUND(100.0 * COUNT(*) FILTER (WHERE is_mitigated) / NULLIF(COUNT(*), 0), 1) AS pct
+        FROM bgp_routes
+        GROUP BY dia, hora
+        ORDER BY dia, hora
+    """)
+
+    if not df_heatmap.empty:
+        dias = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"]
+        df_heatmap["dia_nome"] = df_heatmap["dia"].apply(lambda d: dias[int(d)])
+        chart = (
+            alt.Chart(df_heatmap)
+            .mark_rect()
+            .encode(
+                x=alt.X("hora:O", title="Hora do dia"),
+                y=alt.Y("dia_nome:N", sort=dias, title=""),
+                color=alt.Color(
+                    "pct:Q",
+                    scale=alt.Scale(scheme="reds"),
+                    legend=alt.Legend(title="% Mitigado"),
                 ),
+                tooltip=[
+                    alt.Tooltip("dia_nome:N", title="Dia"),
+                    alt.Tooltip("hora:O", title="Hora"),
+                    alt.Tooltip("pct:Q", title="% Mitigado"),
+                ],
+            )
+            .properties(height=220)
+        )
+        st.altair_chart(chart, use_container_width=True)
+    else:
+        st.info("Sem dados suficientes para o mapa de calor.")
+
+    st.divider()
+
+    # ── Top mitigadores ───────────────────────────────────────────────────────
+    left, right = st.columns(2)
+
+    with left:
+        st.subheader("Top mitigadores")
+        df_mit = query("""
+            SELECT
+                COALESCE(k.name, 'AS' || r.mitigator_asn::text) AS mitigador,
+                COUNT(*) AS total
+            FROM bgp_routes r
+            LEFT JOIN known_asns k ON k.asn = r.mitigator_asn
+            WHERE r.is_mitigated AND r.mitigator_asn IS NOT NULL
+            GROUP BY mitigador
+            ORDER BY total DESC
+            LIMIT 8
+        """)
+        if not df_mit.empty:
+            chart = (
+                alt.Chart(df_mit)
+                .mark_bar(color="#ff4b4b")
+                .encode(
+                    x=alt.X("total:Q", title="Rotas"),
+                    y=alt.Y("mitigador:N", sort="-x", title=""),
+                    tooltip=["mitigador", "total"],
+                )
+                .properties(height=260)
+            )
+            st.altair_chart(chart, use_container_width=True)
+        else:
+            st.info("Sem rotas mitigadas registradas.")
+
+    with right:
+        st.subheader("Histórico de coletas")
+        df_jobs = query("""
+            SELECT
+                id, source, status, started_at, finished_at, records_found,
+                ROUND(EXTRACT(EPOCH FROM (finished_at - started_at))::numeric, 1) AS duração_s,
+                error_msg
+            FROM collection_jobs
+            ORDER BY started_at DESC
+            LIMIT 10
+        """)
+        if not df_jobs.empty:
+
+            def _color_status(val: str) -> str:
+                return {
+                    "done": "background-color:#d4edda",
+                    "error": "background-color:#f8d7da",
+                    "running": "background-color:#fff3cd",
+                }.get(val, "")
+
+            st.dataframe(
+                df_jobs.style.map(_color_status, subset=["status"]),
                 use_container_width=True,
                 hide_index=True,
             )
+        else:
+            st.info("Nenhum job registrado ainda.")
+
+
+# ============================================================================
+# Tab 2 — Análise de Provedor
+# ============================================================================
+with tab_provider:
+    df_owners = query("""
+        SELECT k.asn, COALESCE(k.name, 'AS' || k.asn::text) AS nome
+        FROM known_asns k
+        WHERE k.type = 'owner'
+        ORDER BY k.name
+    """)
+
+    if df_owners.empty:
+        st.info(
+            "Nenhuma provedora cadastrada. Cadastre ASNs do tipo owner na aba Cadastro de ASN."
+        )
+        st.stop()
+
+    opcoes = {f"AS{r.asn} — {r.nome}": r.asn for r in df_owners.itertuples()}
+    escolha = st.selectbox(
+        "Selecione a provedora", list(opcoes.keys()), key="provider_sel"
+    )
+    asn_sel = opcoes[escolha]
+
+    st.divider()
+
+    # ── KPIs do provedor ──────────────────────────────────────────────────────
+    df_kpi = query(
+        """
+        SELECT
+            COUNT(DISTINCT prefix::text)                        AS prefixos,
+            COUNT(*)                                            AS total_rotas,
+            COUNT(*) FILTER (WHERE is_mitigated)                AS mitigadas,
+            ROUND(100.0 * COUNT(*) FILTER (WHERE is_mitigated) / NULLIF(COUNT(*), 0), 1) AS pct,
+            (
+                SELECT COALESCE(k2.name, 'AS' || r2.mitigator_asn::text)
+                FROM bgp_routes r2
+                LEFT JOIN known_asns k2 ON k2.asn = r2.mitigator_asn
+                WHERE r2.origin_asn = %s AND r2.is_mitigated AND r2.mitigator_asn IS NOT NULL
+                GROUP BY k2.name, r2.mitigator_asn
+                ORDER BY COUNT(*) DESC
+                LIMIT 1
+            ) AS principal_mitigador
+        FROM bgp_routes
+        WHERE origin_asn = %s
+    """,
+        (asn_sel, asn_sel),
+    )
+
+    if not df_kpi.empty:
+        r = df_kpi.iloc[0]
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Prefixos /24", int(r.prefixos) if r.prefixos else 0)
+        k2.metric("Total de rotas", f"{int(r.total_rotas):,}" if r.total_rotas else "0")
+        k3.metric("% mitigado", f"{r.pct}%" if r.pct else "0%")
+        k4.metric("Principal mitigador", r.principal_mitigador or "—")
+
+    st.divider()
+
+    # ── Prefixos e status de mitigação ────────────────────────────────────────
+    st.subheader("Prefixos anunciados")
+    df_prefixos = query(
+        """
+        SELECT
+            prefix::text AS prefixo,
+            COUNT(*) AS coletas,
+            COUNT(*) FILTER (WHERE is_mitigated) AS mitigadas,
+            ROUND(100.0 * COUNT(*) FILTER (WHERE is_mitigated) / NULLIF(COUNT(*), 0), 1) AS pct_mitigacao,
+            COALESCE(
+                (SELECT k.name FROM known_asns k
+                 WHERE k.asn = (
+                     SELECT mitigator_asn FROM bgp_routes r2
+                     WHERE r2.origin_asn = %s AND r2.prefix = bgp_routes.prefix AND r2.mitigator_asn IS NOT NULL
+                     LIMIT 1
+                 ) LIMIT 1),
+                '—'
+            ) AS mitigador
+        FROM bgp_routes
+        WHERE origin_asn = %s
+        GROUP BY prefix
+        ORDER BY pct_mitigacao DESC NULLS LAST
+    """,
+        (asn_sel, asn_sel),
+    )
+
+    if not df_prefixos.empty:
+        chart = (
+            alt.Chart(df_prefixos)
+            .mark_bar()
+            .encode(
+                x=alt.X(
+                    "pct_mitigacao:Q",
+                    title="% Mitigação",
+                    scale=alt.Scale(domain=[0, 100]),
+                ),
+                y=alt.Y("prefixo:N", sort="-x", title=""),
+                color=alt.Color(
+                    "pct_mitigacao:Q",
+                    scale=alt.Scale(scheme="redyellowgreen", reverse=True),
+                    legend=None,
+                ),
+                tooltip=[
+                    "prefixo",
+                    "coletas",
+                    "mitigadas",
+                    "pct_mitigacao",
+                    "mitigador",
+                ],
+            )
+            .properties(height=max(200, len(df_prefixos) * 25))
+        )
+        st.altair_chart(chart, use_container_width=True)
+        st.dataframe(
+            df_prefixos.rename(
+                columns={
+                    "prefixo": "Prefixo",
+                    "coletas": "Coletas",
+                    "mitigadas": "Mitigadas",
+                    "pct_mitigacao": "% Mit.",
+                    "mitigador": "Mitigador",
+                }
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.info("Sem rotas coletadas para esta provedora ainda.")
 
     st.divider()
 
     # ── Communities ───────────────────────────────────────────────────────────
-    col_comm, col_geo = st.columns(2)
-
-    with col_comm:
-        st.subheader("Communities mais frequentes")
-        df_comm = query("""
-            SELECT unnest(communities) AS community, COUNT(*) AS freq
-            FROM bgp_routes
-            WHERE array_length(communities, 1) > 0
-            GROUP BY community
-            ORDER BY freq DESC
-            LIMIT 12
-        """)
-
-        if not df_comm.empty:
-            chart = (
-                alt.Chart(df_comm)
-                .mark_bar(color="#7b61ff")
-                .encode(
-                    x=alt.X("freq:Q", title="Frequência"),
-                    y=alt.Y("community:N", sort="-x", title=""),
-                    tooltip=["community", "freq"],
-                )
-                .properties(height=300)
-            )
-            st.altair_chart(chart, use_container_width=True)
-        else:
-            st.info("Sem communities registradas.")
-
-    with col_geo:
-        st.subheader("Distribuição geográfica")
-        df_geo = query("""
-            SELECT
-                COALESCE(k.state, 'N/D') AS uf,
-                COUNT(DISTINCT k.asn) AS asns,
-                COUNT(r.id) AS rotas,
-                COUNT(r.id) FILTER (WHERE r.is_mitigated) AS mitigadas
-            FROM known_asns k
-            LEFT JOIN bgp_routes r ON r.origin_asn = k.asn
-            WHERE k.type = 'owner'
-            GROUP BY uf
-            ORDER BY rotas DESC
-        """)
-
-        if not df_geo.empty:
-            st.dataframe(
-                df_geo.rename(
-                    columns={
-                        "uf": "UF",
-                        "asns": "ASNs",
-                        "rotas": "Rotas",
-                        "mitigadas": "Mitigadas",
-                    }
-                ),
-                use_container_width=True,
-                hide_index=True,
-                height=320,
-            )
-        else:
-            st.info("Sem dados geográficos.")
-
-    st.divider()
-
-    # ── AS-PATH ───────────────────────────────────────────────────────────────
-    st.subheader("Comprimento médio do AS-PATH")
-    df_path = query("""
-        SELECT
-            is_mitigated,
-            ROUND(AVG(array_length(string_to_array(trim(as_path), ' '), 1)), 2) AS avg_hops,
-            MIN(array_length(string_to_array(trim(as_path), ' '), 1)) AS min_hops,
-            MAX(array_length(string_to_array(trim(as_path), ' '), 1)) AS max_hops,
-            COUNT(*) AS total
+    st.subheader("Communities BGP observadas")
+    df_comm = query(
+        """
+        SELECT unnest(communities) AS community, COUNT(*) AS freq
         FROM bgp_routes
-        WHERE as_path <> ''
-        GROUP BY is_mitigated
-    """)
-
-    if not df_path.empty:
-        p1, p2, p3 = st.columns(3)
-        for _, row in df_path.iterrows():
-            label = "Mitigadas" if row["is_mitigated"] else "Não mitigadas"
-            col = p1 if row["is_mitigated"] else p2
-            col.metric(
-                f"Hops médios — {label}",
-                row["avg_hops"],
-                help=f"Min: {row['min_hops']} | Max: {row['max_hops']} | Total: {row['total']:,} rotas",
-            )
-    else:
-        st.info("Sem dados de AS-PATH.")
-
-
-# ============================================================================
-# Tab 3 — Rotas
-# ============================================================================
-with tab_routes:
-    st.subheader("Tabela de rotas BGP")
-
-    f1, f2, f3, f4 = st.columns(4)
-    with f1:
-        df_sources = query("SELECT DISTINCT source FROM bgp_routes ORDER BY source")
-        source_values = (
-            df_sources["source"].dropna().astype(str).tolist()
-            if "source" in df_sources.columns
-            else []
-        )
-        fonte_opts = ["Todas", *source_values]
-        fonte_sel = st.selectbox("Fonte", fonte_opts)
-    with f2:
-        mitig_sel = st.selectbox("Mitigação", ["Todas", "Sim", "Não"])
-    with f3:
-        asn_filter = st.text_input("Origin ASN", placeholder="Ex: 268471")
-    with f4:
-        limite = st.slider("Máx. linhas", 50, 1000, 200, step=50)
-
-    where: list[str] = []
-    params: list = []
-
-    if fonte_sel != "Todas":
-        where.append("r.source = %s")
-        params.append(fonte_sel)
-    if mitig_sel == "Sim":
-        where.append("r.is_mitigated = TRUE")
-    elif mitig_sel == "Não":
-        where.append("r.is_mitigated = FALSE")
-    if asn_filter.strip().isdigit():
-        where.append("r.origin_asn = %s")
-        params.append(int(asn_filter.strip()))
-
-    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
-
-    df_routes = query(
-        f"""
-        SELECT
-            r.id,
-            r.prefix::text              AS prefixo,
-            r.origin_asn,
-            k_orig.name                 AS origem,
-            r.is_mitigated              AS mitigada,
-            COALESCE(k_mit.name, '')    AS mitigador,
-            r.mitigator_asn,
-            r.source                    AS fonte,
-            r.as_path,
-            array_to_string(r.communities, ', ') AS communities,
-            r.collected_at
-        FROM bgp_routes r
-        LEFT JOIN known_asns k_orig ON k_orig.asn = r.origin_asn
-        LEFT JOIN known_asns k_mit  ON k_mit.asn  = r.mitigator_asn
-        {where_sql}
-        ORDER BY r.collected_at DESC
-        LIMIT %s
-        """,
-        tuple(params + [limite]),
+        WHERE origin_asn = %s AND array_length(communities, 1) > 0
+        GROUP BY community
+        ORDER BY freq DESC
+        LIMIT 12
+    """,
+        (asn_sel,),
     )
 
-    if not df_routes.empty:
-        st.dataframe(df_routes, use_container_width=True, hide_index=True)
-        st.caption(f"{len(df_routes)} linhas exibidas")
-
-        csv = df_routes.to_csv(index=False).encode("utf-8")
-        st.download_button("⬇️ Exportar CSV", csv, "rotas_bgp.csv", "text/csv")
-    else:
-        st.info("Nenhuma rota encontrada com os filtros selecionados.")
-
-
-# ============================================================================
-# Tab 4 — Eventos
-# ============================================================================
-with tab_events:
-    st.subheader("Eventos de possível ataque DDoS")
-    st.caption(
-        "Heurística: evento inicia quando um prefixo /24 fica 100% mitigado "
-        "e encerra quando deixa de estar 100% mitigado."
-    )
-
-    ev1, ev2, ev3 = st.columns(3)
-
-    df_events_kpi = query(
-        """
-        SELECT
-            COUNT(*) AS total_eventos,
-            COUNT(*) FILTER (WHERE ended_at IS NULL) AS eventos_abertos,
-            COUNT(*) FILTER (
-                WHERE started_at >= NOW() - INTERVAL '24 hours'
-            ) AS eventos_24h
-        FROM ddos_attack_events
-        """
-    )
-
-    if not df_events_kpi.empty:
-        row = df_events_kpi.iloc[0]
-        ev1.metric("Total de eventos", int(row["total_eventos"]))
-        ev2.metric("Eventos em andamento", int(row["eventos_abertos"]))
-        ev3.metric("Eventos nas últimas 24h", int(row["eventos_24h"]))
-
-    st.divider()
-
-    st.subheader("Horários de início dos eventos")
-    df_timeline = query(
-        """
-        SELECT
-            DATE_TRUNC('hour', started_at) AS hora,
-            COUNT(*) AS eventos
-        FROM ddos_attack_events
-        GROUP BY hora
-        ORDER BY hora
-        """
-    )
-    if not df_timeline.empty:
-        df_timeline["hora"] = pd.to_datetime(df_timeline["hora"])
+    if not df_comm.empty:
         chart = (
-            alt.Chart(df_timeline)
-            .mark_bar(color="#d6336c")
+            alt.Chart(df_comm)
+            .mark_bar(color="#7b61ff")
             .encode(
-                x=alt.X("hora:T", title="Hora"),
-                y=alt.Y("eventos:Q", title="Quantidade de eventos"),
-                tooltip=["hora:T", "eventos"],
+                x=alt.X("freq:Q", title="Frequência"),
+                y=alt.Y("community:N", sort="-x", title=""),
+                tooltip=["community", "freq"],
             )
-            .properties(height=240)
+            .properties(height=280)
         )
         st.altair_chart(chart, use_container_width=True)
     else:
-        st.info("Nenhum evento detectado ainda.")
+        st.info("Sem communities registradas para esta provedora.")
 
     st.divider()
 
-    st.subheader("Tabela de eventos detectados")
-    df_events = query(
+    # ── Mapa de calor — prefixo × tempo ──────────────────────────────────────
+    st.subheader("Mapa de calor — mitigação por prefixo ao longo do tempo")
+    st.caption(
+        "Cada célula representa uma coleta. Vermelho = 100% mitigado, branco = sem mitigação."
+    )
+    df_heat_prov = query(
         """
         SELECT
-            id,
-            source AS fonte,
-            prefix::text AS prefixo,
-            origin_asn,
-            mitigator_asn,
-            started_at AS inicio,
-            ended_at AS fim,
-            duration_seconds AS duracao_segundos
-        FROM ddos_attack_events
-        ORDER BY started_at DESC
-        LIMIT 500
-        """
+            prefix::text                                                              AS prefixo,
+            DATE_TRUNC('hour', collected_at)                                          AS hora,
+            ROUND(100.0 * COUNT(*) FILTER (WHERE is_mitigated) / NULLIF(COUNT(*), 0), 1) AS pct
+        FROM bgp_routes
+        WHERE origin_asn = %s
+        GROUP BY prefix, hora
+        ORDER BY hora
+    """,
+        (asn_sel,),
     )
-    if not df_events.empty:
-        st.dataframe(df_events, use_container_width=True, hide_index=True)
+
+    if not df_heat_prov.empty:
+        df_heat_prov["hora"] = pd.to_datetime(df_heat_prov["hora"])
+        chart = (
+            alt.Chart(df_heat_prov)
+            .mark_rect()
+            .encode(
+                x=alt.X("hora:T", title="Hora da coleta"),
+                y=alt.Y("prefixo:N", title=""),
+                color=alt.Color(
+                    "pct:Q",
+                    scale=alt.Scale(scheme="reds", domain=[0, 100]),
+                    legend=alt.Legend(title="% Mitigado"),
+                ),
+                tooltip=[
+                    alt.Tooltip("prefixo:N", title="Prefixo"),
+                    alt.Tooltip("hora:T", title="Hora", format="%d/%m %H:%M"),
+                    alt.Tooltip("pct:Q", title="% Mitigado"),
+                ],
+            )
+            .properties(height=max(150, len(df_heat_prov["prefixo"].unique()) * 30))
+        )
+        st.altair_chart(chart, use_container_width=True)
     else:
-        st.info("Sem eventos para exibir.")
+        st.info("Sem dados suficientes para o mapa de calor.")
 
     st.divider()
 
-    st.subheader("Auditoria completa dos dados capturados")
+    # ── Auditoria de rotas ────────────────────────────────────────────────────
+    st.subheader("Auditoria de rotas")
     st.caption(
-        "Cada linha representa o consolidado de uma coleta por "
-        "fonte + prefixo + ASN de origem."
+        "Cada linha representa uma rota coletada. O caminho mostra todas as ASNs pelo qual o tráfego passa naquele momento."
     )
 
-    c1, c2 = st.columns(2)
-    with c1:
-        filtro_fonte = st.selectbox(
-            "Fonte",
-            ["Todas", "ripe", "bgpview"],
-            key="audit_fonte",
+    col_f1, col_f2 = st.columns([2, 1])
+    with col_f1:
+        prefixo_filtro = st.text_input(
+            "Filtrar por prefixo", placeholder="Ex: 45.160.192.0/24", key="audit_prefix"
         )
-    with c2:
-        limite_auditoria = st.slider(
-            "Máx. linhas da auditoria",
-            100,
-            5000,
-            1000,
-            step=100,
-            key="audit_limite",
+    with col_f2:
+        limite_audit = st.slider(
+            "Máx. linhas", 50, 500, 100, step=50, key="audit_limit"
         )
 
-    where_audit = ""
-    params_audit: list = []
-    if filtro_fonte != "Todas":
-        where_audit = "WHERE source = %s"
-        params_audit.append(filtro_fonte)
+    where_audit = ["r.origin_asn = %s"]
+    params_audit: list = [asn_sel]
+    if prefixo_filtro.strip():
+        where_audit.append("r.prefix::text LIKE %s")
+        params_audit.append(f"%{prefixo_filtro.strip()}%")
 
-    df_audit = query(
+    df_rotas = query(
         f"""
         SELECT
-            id,
-            source AS fonte,
-            collection_ts AS horario_coleta,
-            prefix::text AS prefixo,
-            origin_asn,
-            total_paths,
-            mitigated_paths,
-            ROUND((mitigation_ratio * 100)::numeric, 2) AS percentual_mitigado,
-            is_fully_mitigated AS mitigado_100,
-            mitigator_asn
-        FROM mitigation_snapshots
-        {where_audit}
-        ORDER BY collection_ts DESC
+            r.prefix::text   AS prefixo,
+            r.as_path,
+            array_to_string(r.communities, ', ') AS communities,
+            r.is_mitigated   AS mitigada,
+            r.collected_at   AS coletada_em
+        FROM bgp_routes r
+        WHERE {" AND ".join(where_audit)}
+        ORDER BY r.collected_at DESC
         LIMIT %s
         """,
-        tuple(params_audit + [limite_auditoria]),
+        tuple(params_audit + [limite_audit]),
     )
 
-    if not df_audit.empty:
-        st.dataframe(df_audit, use_container_width=True, hide_index=True)
-        csv_audit = df_audit.to_csv(index=False).encode("utf-8")
+    if not df_rotas.empty:
+        # Monta mapa ASN → nome para formatar o caminho
+        df_nomes = query("SELECT asn, name FROM known_asns WHERE name IS NOT NULL")
+        nome_map: dict[int, str] = (
+            {int(r.asn): r.name for r in df_nomes.itertuples()}
+            if not df_nomes.empty
+            else {}
+        )
+
+        def _fmt_path(raw: str) -> str:
+            if not raw:
+                return "—"
+            hops = []
+            for part in raw.strip().split():
+                try:
+                    asn = int(part)
+                    label = nome_map.get(asn, f"AS{asn}")
+                    hops.append(label)
+                except ValueError:
+                    hops.append(part)
+            return " → ".join(hops)
+
+        df_rotas["caminho"] = df_rotas["as_path"].apply(_fmt_path)
+
+        st.dataframe(
+            df_rotas[
+                ["prefixo", "caminho", "communities", "mitigada", "coletada_em"]
+            ].rename(
+                columns={
+                    "prefixo": "Prefixo",
+                    "caminho": "Caminho (AS-PATH)",
+                    "communities": "Communities",
+                    "mitigada": "Mitigada",
+                    "coletada_em": "Coletada em",
+                }
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.caption(f"{len(df_rotas)} rotas exibidas")
+        csv = (
+            df_rotas[
+                [
+                    "prefixo",
+                    "as_path",
+                    "caminho",
+                    "communities",
+                    "mitigada",
+                    "coletada_em",
+                ]
+            ]
+            .to_csv(index=False)
+            .encode("utf-8")
+        )
         st.download_button(
-            "⬇️ Exportar auditoria CSV",
-            csv_audit,
-            "auditoria_mitigacao.csv",
-            "text/csv",
+            "Exportar CSV", csv, f"auditoria_as{asn_sel}.csv", "text/csv"
         )
     else:
-        st.info("Sem snapshots de auditoria ainda.")
+        st.info("Sem rotas para exibir.")
 
 
 # ============================================================================
-# Tab 5 — Gerenciar ASNs
+# Tab 3 — Cadastro de ASN
 # ============================================================================
 with tab_asns:
     # ── Lista de ASNs ─────────────────────────────────────────────────────────
@@ -825,7 +754,7 @@ with tab_asns:
     if not df_asns.empty:
         null_count = df_asns["cidade"].isna().sum()
         if null_count:
-            st.warning(f"⚠️ {null_count} ASN(s) sem cidade cadastrada.")
+            st.warning(f"{null_count} ASN(s) sem cidade cadastrada.")
 
         st.dataframe(
             df_asns.style.highlight_null(color="#fff3cd"),
@@ -861,7 +790,7 @@ with tab_asns:
         st.write("")
         st.write("")
         buscar = st.button(
-            "🔍 Buscar informações",
+            "Buscar informações",
             disabled=asn_input is None,
             help="Consulta BGPView e banco de dados para pré-preencher os campos",
         )
@@ -879,17 +808,17 @@ with tab_asns:
                 f"AS{asn_int} já está no banco. Os campos foram preenchidos com os dados atuais — edite e salve para atualizar."
             )
         else:
-            with st.spinner("Consultando BGPView..."):
+            with st.spinner("Consultando RIPE Stat..."):
                 looked_up = _lookup_asn(asn_int)
             if looked_up:
                 st.session_state.asn_form_data = looked_up
                 st.success(
-                    "Dados encontrados no BGPView. Confira, edite se necessário e salve."
+                    "Dados encontrados no RIPE Stat. Confira, edite se necessário e salve."
                 )
             else:
                 st.session_state.asn_form_data = {}
                 st.warning(
-                    "Não foi possível buscar via BGPView. Preencha os campos manualmente."
+                    "Não foi possível buscar via RIPE Stat. Preencha os campos manualmente."
                 )
 
     fd = st.session_state.asn_form_data
@@ -907,10 +836,10 @@ with tab_asns:
             )
             cidade = st.text_input("Cidade", value=fd.get("city", ""))
         with c2:
-            tipo = st.selectbox(
+            tipo = st.segmented_control(
                 "Tipo *",
-                ["owner", "mitigator", "transit"],
-                index=["owner", "mitigator", "transit"].index(fd.get("type", "owner")),
+                options=["owner", "mitigator", "transit"],
+                default=fd.get("type", "owner"),
                 help="owner = ISP monitorado | mitigator = provedor de mitigação DDoS | transit = trânsito",
             )
             estado = st.text_input(
@@ -921,7 +850,7 @@ with tab_asns:
             )
 
         salvar = st.form_submit_button(
-            "💾 Salvar ASN",
+            "Salvar ASN",
             disabled=asn_input is None,
             type="primary",
         )
@@ -958,7 +887,7 @@ with tab_asns:
                     st.error(f"Erro ao salvar: {e}")
                 else:
                     st.success(
-                        f"✅ AS{int(asn_input)} — {nome.strip()} salvo com sucesso!"
+                        f"AS{int(asn_input)} — {nome.strip()} salvo com sucesso."
                     )
                     st.session_state.asn_form_data = {}
 
@@ -984,7 +913,7 @@ with tab_asns:
                                 _conn().commit()
                                 if inserted:
                                     st.info(
-                                        f"🛡️ {inserted} mitigador(es) identificados automaticamente."
+                                        f"{inserted} mitigador(es) identificados automaticamente."
                                     )
                         except Exception as e:
                             st.warning(
@@ -1010,7 +939,7 @@ with tab_asns:
 
         confirmar, _ = st.columns([1, 3])
         with confirmar:
-            if st.button("🗑️ Remover", type="secondary"):
+            if st.button("Remover", type="secondary"):
                 asn_val = opcoes[asn_remover]
                 try:
                     with _conn().cursor() as cur:

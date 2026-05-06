@@ -56,7 +56,7 @@ def test_build_attack_events_detects_start_and_end() -> None:
 def test_build_attack_events_keeps_open_event_without_end() -> None:
     snapshots = [
         {
-            "source": "bgpview",
+            "source": "ripe",
             "prefix": "8.8.8.0/24",
             "origin_asn": 15169,
             "mitigator_asn": 20940,
@@ -64,7 +64,7 @@ def test_build_attack_events_keeps_open_event_without_end() -> None:
             "collection_ts": datetime(2026, 4, 29, 11, 0, tzinfo=UTC),
         },
         {
-            "source": "bgpview",
+            "source": "ripe",
             "prefix": "8.8.8.0/24",
             "origin_asn": 15169,
             "mitigator_asn": 20940,
@@ -76,7 +76,7 @@ def test_build_attack_events_keeps_open_event_without_end() -> None:
     events = _build_attack_events(snapshots)
 
     assert len(events) == 1
-    assert events[0][0] == "bgpview"
+    assert events[0][0] == "ripe"
     assert events[0][1] == "8.8.8.0/24"
     assert events[0][2] == 15169
     assert events[0][3] == 20940

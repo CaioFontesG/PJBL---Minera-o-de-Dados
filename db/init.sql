@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS bgp_routes (
     as_path         TEXT NOT NULL,
     communities     TEXT[],
     source          VARCHAR(50) NOT NULL
-                        CHECK (source IN ('ripe', 'bgpview')),
+                        CHECK (source IN ('ripe')),
     collected_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     is_mitigated    BOOLEAN DEFAULT FALSE,
     raw_data        JSONB
@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS known_asns (
 CREATE TABLE IF NOT EXISTS collection_jobs (
     id              BIGSERIAL PRIMARY KEY,
     source          VARCHAR(50) NOT NULL
-                        CHECK (source IN ('ripe', 'bgpview')),
+                        CHECK (source IN ('ripe')),
     status          VARCHAR(20) NOT NULL DEFAULT 'pending'
                         CHECK (status IN ('pending', 'running', 'done', 'error')),
     started_at      TIMESTAMPTZ,
@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS collection_jobs (
 CREATE TABLE IF NOT EXISTS mitigation_snapshots (
     id                  BIGSERIAL PRIMARY KEY,
     source              VARCHAR(50) NOT NULL
-                            CHECK (source IN ('ripe', 'bgpview')),
+                            CHECK (source IN ('ripe')),
     collection_ts       TIMESTAMPTZ NOT NULL,
     prefix              CIDR NOT NULL,
     origin_asn          INTEGER NOT NULL,
@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS mitigation_snapshots (
 CREATE TABLE IF NOT EXISTS ddos_attack_events (
     id                  BIGSERIAL PRIMARY KEY,
     source              VARCHAR(50) NOT NULL
-                            CHECK (source IN ('ripe', 'bgpview')),
+                            CHECK (source IN ('ripe')),
     prefix              CIDR NOT NULL,
     origin_asn          INTEGER NOT NULL,
     mitigator_asn       INTEGER,
@@ -123,51 +123,3 @@ CREATE INDEX IF NOT EXISTS idx_events_started_at
 CREATE INDEX IF NOT EXISTS idx_events_lookup
     ON ddos_attack_events (source, prefix, origin_asn);
 
--- =============================================================================
--- Seed — ASNs conhecidos
--- Fontes verificadas: BGPView (bgpview.io) e PeeringDB (peeringdb.com)
--- Última verificação: 2025-06
--- =============================================================================
-
-INSERT INTO known_asns (asn, name, type, country, city, state) VALUES
-
--- ─── ASNs monitorados — Maranhão ──────────────────────────────────────────────
-(28638,  'Universidade Estadual do Maranhão (UEMA)',      'owner', 'BR', NULL, 'MA'),
-(61588,  'Digital Provedor de Acesso a Internet',         'owner', 'BR', NULL, 'MA'),
-(262456, 'Elo Multimídia Ltda',                          'owner', 'BR', NULL, 'MA'),
-(262503, 'Wiki Telecomunicações Eireli',                  'owner', 'BR', NULL, 'MA'),
-(262727, 'Atualnet Provedor de Internet Ltda',            'owner', 'BR', NULL, 'MA'),
-(263508, 'Simnet Telecomunicações Ltda',                  'owner', 'BR', NULL, 'MA'),
-(265300, 'Rede Regional Telecom',                        'owner', 'BR', NULL, 'MA'),
-(265939, 'Tribunal Regional do Trabalho — 16ª Região',   'owner', 'BR', NULL, 'MA'),
-(265994, 'Estado do Maranhão — SEGOV',                   'owner', 'BR', NULL, 'MA'),
-(266339, 'DDSAT Net Telecom e Inf — ME',                 'owner', 'BR', NULL, 'MA'),
-(266382, 'Mais Provedor Serviços de Internet Ltda',       'owner', 'BR', NULL, 'MA'),
-(266616, 'Cohab Net',                                    'owner', 'BR', NULL, 'MA'),
-(267001, 'Tribunal de Contas do Estado do Maranhão',      'owner', 'BR', NULL, 'MA'),
-(267575, 'Maranet Telecom Ltda',                         'owner', 'BR', NULL, 'MA'),
-(268183, 'Ventura Telecomunicações Ltda',                 'owner', 'BR', NULL, 'MA'),
-(268314, 'Ewerton da Silva Lopes Telecomunicações',       'owner', 'BR', NULL, 'MA'),
-(268471, 'Estrelas Internet Ltda',                       'owner', 'BR', NULL, 'MA'),
-(268544, 'Rede Ralpnet Telecomunicações Eireli',          'owner', 'BR', NULL, 'MA'),
-(268858, 'Nando Net Fibra',                              'owner', 'BR', NULL, 'MA'),
-(269301, 'Voe Internet Ltda',                            'owner', 'BR', NULL, 'MA'),
-(269514, 'J D Araujo ME',                                'owner', 'BR', NULL, 'MA'),
-(269528, 'T. de S. Alencar',                             'owner', 'BR', NULL, 'MA'),
-(269609, 'Giga Net Informática Ltda',                    'owner', 'BR', NULL, 'MA'),
-(269634, 'Fixtell Telecom NE Ltda',                      'owner', 'BR', NULL, 'MA'),
-(269655, 'Conect Fibra',                                 'owner', 'BR', NULL, 'MA'),
-(269712, 'Octa Telecom',                                 'owner', 'BR', NULL, 'MA'),
-(270256, 'Vildonet Telecom',                             'owner', 'BR', NULL, 'MA'),
-(270350, 'RDS Tecnologia — ME',                          'owner', 'BR', NULL, 'MA'),
-(270428, 'J Douglas dos Santos Internet',                'owner', 'BR', NULL, 'MA'),
-
--- ─── Mitigadores: rode scripts/find_mitigators.py --output sql e cole aqui ──
-
-ON CONFLICT (asn) DO UPDATE
-    SET name       = EXCLUDED.name,
-        type       = EXCLUDED.type,
-        country    = EXCLUDED.country,
-        city       = EXCLUDED.city,
-        state      = EXCLUDED.state,
-        updated_at = NOW();

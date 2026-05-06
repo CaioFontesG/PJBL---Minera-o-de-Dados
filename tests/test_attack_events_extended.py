@@ -132,8 +132,8 @@ def test_build_attack_events_consecutive_mitigated_counts_as_one_event() -> None
 
 def test_build_attack_events_ongoing_attack_has_no_end() -> None:
     snaps = [
-        _snap("bgptools", "8.8.8.0/24", 15169, 20940, True, 11),
-        _snap("bgptools", "8.8.8.0/24", 15169, 20940, True, 12),
+        _snap("ripe", "8.8.8.0/24", 15169, 20940, True, 11),
+        _snap("ripe", "8.8.8.0/24", 15169, 20940, True, 12),
     ]
     events = _build_attack_events(snaps)
     assert len(events) == 1
@@ -183,43 +183,15 @@ def test_build_attack_events_tuple_structure() -> None:
 # ── Fontes diferentes ─────────────────────────────────────────────────────────
 
 
-def test_build_attack_events_different_sources_are_independent() -> None:
-    """Mesmo prefixo em fontes distintas gera eventos separados."""
+def test_build_attack_events_different_prefixes_are_independent() -> None:
+    """Prefixos distintos geram eventos separados."""
     snaps = [
-        {
-            "source": "ripe",
-            "prefix": "1.1.1.0/24",
-            "origin_asn": 64500,
-            "mitigator_asn": 13335,
-            "is_fully_mitigated": True,
-            "collection_ts": t(10),
-        },
-        {
-            "source": "ripe",
-            "prefix": "1.1.1.0/24",
-            "origin_asn": 64500,
-            "mitigator_asn": 13335,
-            "is_fully_mitigated": False,
-            "collection_ts": t(11),
-        },
-        {
-            "source": "bgptools",
-            "prefix": "1.1.1.0/24",
-            "origin_asn": 64500,
-            "mitigator_asn": 13335,
-            "is_fully_mitigated": True,
-            "collection_ts": t(10),
-        },
-        {
-            "source": "bgptools",
-            "prefix": "1.1.1.0/24",
-            "origin_asn": 64500,
-            "mitigator_asn": 13335,
-            "is_fully_mitigated": False,
-            "collection_ts": t(12),
-        },
+        _snap("ripe", "1.1.1.0/24", 64500, 13335, True, 10),
+        _snap("ripe", "1.1.1.0/24", 64500, 13335, False, 11),
+        _snap("ripe", "2.2.2.0/24", 64500, 13335, True, 10),
+        _snap("ripe", "2.2.2.0/24", 64500, 13335, False, 12),
     ]
     events = _build_attack_events(snaps)
     assert len(events) == 2
-    sources = {e[0] for e in events}
-    assert sources == {"ripe", "bgptools"}
+    prefixes = {e[1] for e in events}
+    assert prefixes == {"1.1.1.0/24", "2.2.2.0/24"}

@@ -43,7 +43,7 @@ services:
       dockerfile: scheduler/Dockerfile
     environment:
       REDIS_URL: redis://redis:6379/0
-      COLLECTION_INTERVAL_MINUTES: ${COLLECTION_INTERVAL_MINUTES:-60}
+      COLLECTION_MINUTE: ${COLLECTION_MINUTE:-0}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:
       postgres:
@@ -91,10 +91,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-bgp_mining}
       POSTGRES_USER: ${POSTGRES_USER:-bgp}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-Acesso14}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    expose:
-      - "8501"
+    ports:
+      - "8501:8501"
     depends_on:
       postgres:
         condition: service_healthy

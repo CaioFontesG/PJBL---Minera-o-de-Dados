@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from redis import Redis
 from rq import Queue
@@ -43,9 +44,8 @@ def main() -> None:
     queue = Queue(QUEUE_NAME, connection=redis_conn)
 
     scheduler = BlockingScheduler(timezone="UTC")
-    interval_minutes = settings.collection_interval_minutes
+    collection_minute = settings.collection_minute
 
-    # Agendamento dos coletores ativos
     # Descoberta de mitigadores — roda imediatamente no startup e depois semanalmente
     scheduler.add_job(
         _enqueue_job,
@@ -56,20 +56,13 @@ def main() -> None:
         next_run_time=datetime.utcnow(),
     )
 
+    # Coleta RIPE — dispara todo hora no minuto configurado (COLLECTION_MINUTE)
     scheduler.add_job(
         _enqueue_job,
-        trigger=IntervalTrigger(minutes=interval_minutes),
+        trigger=CronTrigger(minute=collection_minute),
         args=["run_ripe", queue],
         id="ripe",
         name="Coletor RIPE RIS",
-        next_run_time=datetime.utcnow(),
-    )
-    scheduler.add_job(
-        _enqueue_job,
-        trigger=IntervalTrigger(minutes=interval_minutes),
-        args=["run_bgptools", queue],
-        id="bgptools",
-        name="Coletor bgp.tools",
         next_run_time=datetime.utcnow(),
     )
 
@@ -77,8 +70,8 @@ def main() -> None:
     Path("/tmp/scheduler.pid").write_text(str(os.getpid()))
 
     logger.info(
-        "Scheduler iniciado. Intervalo: %d min. Jobs: discover_mitigators (startup+semanal), ripe, bgptools",
-        interval_minutes,
+        "Scheduler iniciado. Coleta todo hora aos :%02d. Jobs: discover_mitigators (startup+semanal), ripe",
+        collection_minute,
     )
     try:
         scheduler.start()

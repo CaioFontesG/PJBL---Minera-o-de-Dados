@@ -53,9 +53,9 @@ def test_raw_route_accepts_cidr_with_host_bits() -> None:
     assert route.prefix == "8.8.8.128/24"
 
 
-def test_raw_route_accepts_bgptools_as_source() -> None:
-    route = RawRoute(prefix="8.8.8.0/24", as_path="64500 15169", source="bgptools")
-    assert route.source == "bgptools"
+def test_raw_route_accepts_ripe_as_source() -> None:
+    route = RawRoute(prefix="8.8.8.0/24", as_path="64500 15169", source="ripe")
+    assert route.source == "ripe"
 
 
 # ── CleanRoute ────────────────────────────────────────────────────────────────

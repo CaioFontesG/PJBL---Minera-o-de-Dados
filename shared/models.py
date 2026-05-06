@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 # ─── Enums / Literals ─────────────────────────────────────────────────────────
 
-SourceLiteral = str  # 'ripe' | 'bgpview'
+SourceLiteral = str  # 'ripe'
 StatusLiteral = str  # 'pending' | 'running' | 'done' | 'error'
 AsnTypeLiteral = str  # 'mitigator' | 'owner' | 'transit'
 
