@@ -426,298 +426,241 @@ with tab_provider:
         ORDER BY k.name
     """)
 
+    asn_sel = None
+
     if df_owners.empty:
         st.info(
             "Nenhuma provedora cadastrada. Cadastre ASNs do tipo owner na aba Cadastro de ASN."
         )
-        st.stop()
-
-    opcoes = {f"AS{r.asn} — {r.nome}": r.asn for r in df_owners.itertuples()}
-    escolha = st.selectbox(
-        "Selecione a provedora", list(opcoes.keys()), key="provider_sel"
-    )
-    asn_sel = opcoes[escolha]
-
-    st.divider()
-
-    # ── KPIs do provedor ──────────────────────────────────────────────────────
-    df_kpi = query(
-        """
-        SELECT
-            COUNT(DISTINCT prefix::text)                        AS prefixos,
-            COUNT(*)                                            AS total_rotas,
-            COUNT(*) FILTER (WHERE is_mitigated)                AS mitigadas,
-            ROUND(100.0 * COUNT(*) FILTER (WHERE is_mitigated) / NULLIF(COUNT(*), 0), 1) AS pct,
-            (
-                SELECT COALESCE(k2.name, 'AS' || r2.mitigator_asn::text)
-                FROM bgp_routes r2
-                LEFT JOIN known_asns k2 ON k2.asn = r2.mitigator_asn
-                WHERE r2.origin_asn = %s AND r2.is_mitigated AND r2.mitigator_asn IS NOT NULL
-                GROUP BY k2.name, r2.mitigator_asn
-                ORDER BY COUNT(*) DESC
-                LIMIT 1
-            ) AS principal_mitigador
-        FROM bgp_routes
-        WHERE origin_asn = %s
-    """,
-        (asn_sel, asn_sel),
-    )
-
-    if not df_kpi.empty:
-        r = df_kpi.iloc[0]
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Prefixos /24", int(r.prefixos) if r.prefixos else 0)
-        k2.metric("Total de rotas", f"{int(r.total_rotas):,}" if r.total_rotas else "0")
-        k3.metric("% mitigado", f"{r.pct}%" if r.pct else "0%")
-        k4.metric("Principal mitigador", r.principal_mitigador or "—")
-
-    st.divider()
-
-    # ── Prefixos e status de mitigação ────────────────────────────────────────
-    st.subheader("Prefixos anunciados")
-    df_prefixos = query(
-        """
-        SELECT
-            prefix::text AS prefixo,
-            COUNT(*) AS coletas,
-            COUNT(*) FILTER (WHERE is_mitigated) AS mitigadas,
-            ROUND(100.0 * COUNT(*) FILTER (WHERE is_mitigated) / NULLIF(COUNT(*), 0), 1) AS pct_mitigacao,
-            COALESCE(
-                (SELECT k.name FROM known_asns k
-                 WHERE k.asn = (
-                     SELECT mitigator_asn FROM bgp_routes r2
-                     WHERE r2.origin_asn = %s AND r2.prefix = bgp_routes.prefix AND r2.mitigator_asn IS NOT NULL
-                     LIMIT 1
-                 ) LIMIT 1),
-                '—'
-            ) AS mitigador
-        FROM bgp_routes
-        WHERE origin_asn = %s
-        GROUP BY prefix
-        ORDER BY pct_mitigacao DESC NULLS LAST
-    """,
-        (asn_sel, asn_sel),
-    )
-
-    if not df_prefixos.empty:
-        chart = (
-            alt.Chart(df_prefixos)
-            .mark_bar()
-            .encode(
-                x=alt.X(
-                    "pct_mitigacao:Q",
-                    title="% Mitigação",
-                    scale=alt.Scale(domain=[0, 100]),
-                ),
-                y=alt.Y("prefixo:N", sort="-x", title=""),
-                color=alt.Color(
-                    "pct_mitigacao:Q",
-                    scale=alt.Scale(scheme="redyellowgreen", reverse=True),
-                    legend=None,
-                ),
-                tooltip=[
-                    "prefixo",
-                    "coletas",
-                    "mitigadas",
-                    "pct_mitigacao",
-                    "mitigador",
-                ],
-            )
-            .properties(height=max(200, len(df_prefixos) * 25))
-        )
-        st.altair_chart(chart, use_container_width=True)
-        st.dataframe(
-            df_prefixos.rename(
-                columns={
-                    "prefixo": "Prefixo",
-                    "coletas": "Coletas",
-                    "mitigadas": "Mitigadas",
-                    "pct_mitigacao": "% Mit.",
-                    "mitigador": "Mitigador",
-                }
-            ),
-            use_container_width=True,
-            hide_index=True,
-        )
     else:
-        st.info("Sem rotas coletadas para esta provedora ainda.")
-
-    st.divider()
-
-    # ── Communities ───────────────────────────────────────────────────────────
-    st.subheader("Communities BGP observadas")
-    df_comm = query(
-        """
-        SELECT unnest(communities) AS community, COUNT(*) AS freq
-        FROM bgp_routes
-        WHERE origin_asn = %s AND array_length(communities, 1) > 0
-        GROUP BY community
-        ORDER BY freq DESC
-        LIMIT 12
-    """,
-        (asn_sel,),
-    )
-
-    if not df_comm.empty:
-        chart = (
-            alt.Chart(df_comm)
-            .mark_bar(color="#7b61ff")
-            .encode(
-                x=alt.X("freq:Q", title="Frequência"),
-                y=alt.Y("community:N", sort="-x", title=""),
-                tooltip=["community", "freq"],
-            )
-            .properties(height=280)
+        opcoes = {f"AS{r.asn} — {r.nome}": r.asn for r in df_owners.itertuples()}
+        escolha = st.selectbox(
+            "Selecione a provedora", list(opcoes.keys()), key="provider_sel"
         )
-        st.altair_chart(chart, use_container_width=True)
-    else:
-        st.info("Sem communities registradas para esta provedora.")
+        asn_sel = opcoes[escolha]
 
-    st.divider()
+    if asn_sel is not None:
+        st.divider()
 
-    # ── Mapa de calor — prefixo × tempo ──────────────────────────────────────
-    st.subheader("Mapa de calor — mitigação por prefixo ao longo do tempo")
-    st.caption(
-        "Cada célula representa uma coleta. Vermelho = 100% mitigado, branco = sem mitigação."
-    )
-    df_heat_prov = query(
-        """
-        SELECT
-            prefix::text                                                              AS prefixo,
-            DATE_TRUNC('hour', collected_at)                                          AS hora,
-            ROUND(100.0 * COUNT(*) FILTER (WHERE is_mitigated) / NULLIF(COUNT(*), 0), 1) AS pct
-        FROM bgp_routes
-        WHERE origin_asn = %s
-        GROUP BY prefix, hora
-        ORDER BY hora
-    """,
-        (asn_sel,),
-    )
-
-    if not df_heat_prov.empty:
-        df_heat_prov["hora"] = pd.to_datetime(df_heat_prov["hora"])
-        chart = (
-            alt.Chart(df_heat_prov)
-            .mark_rect()
-            .encode(
-                x=alt.X("hora:T", title="Hora da coleta"),
-                y=alt.Y("prefixo:N", title=""),
-                color=alt.Color(
-                    "pct:Q",
-                    scale=alt.Scale(scheme="reds", domain=[0, 100]),
-                    legend=alt.Legend(title="% Mitigado"),
-                ),
-                tooltip=[
-                    alt.Tooltip("prefixo:N", title="Prefixo"),
-                    alt.Tooltip("hora:T", title="Hora", format="%d/%m %H:%M"),
-                    alt.Tooltip("pct:Q", title="% Mitigado"),
-                ],
-            )
-            .properties(height=max(150, len(df_heat_prov["prefixo"].unique()) * 30))
-        )
-        st.altair_chart(chart, use_container_width=True)
-    else:
-        st.info("Sem dados suficientes para o mapa de calor.")
-
-    st.divider()
-
-    # ── Auditoria de rotas ────────────────────────────────────────────────────
-    st.subheader("Auditoria de rotas")
-    st.caption(
-        "Cada linha representa uma rota coletada. O caminho mostra todas as ASNs pelo qual o tráfego passa naquele momento."
-    )
-
-    col_f1, col_f2 = st.columns([2, 1])
-    with col_f1:
-        prefixo_filtro = st.text_input(
-            "Filtrar por prefixo", placeholder="Ex: 45.160.192.0/24", key="audit_prefix"
-        )
-    with col_f2:
-        limite_audit = st.slider(
-            "Máx. linhas", 50, 500, 100, step=50, key="audit_limit"
-        )
-
-    where_audit = ["r.origin_asn = %s"]
-    params_audit: list = [asn_sel]
-    if prefixo_filtro.strip():
-        where_audit.append("r.prefix::text LIKE %s")
-        params_audit.append(f"%{prefixo_filtro.strip()}%")
-
-    df_rotas = query(
-        f"""
-        SELECT
-            r.prefix::text   AS prefixo,
-            r.as_path,
-            array_to_string(r.communities, ', ') AS communities,
-            r.is_mitigated   AS mitigada,
-            r.collected_at   AS coletada_em
-        FROM bgp_routes r
-        WHERE {" AND ".join(where_audit)}
-        ORDER BY r.collected_at DESC
-        LIMIT %s
+        # ── KPIs do provedor ──────────────────────────────────────────────────
+        df_kpi = query(
+            """
+            SELECT
+                COUNT(DISTINCT prefix::text)                        AS prefixos,
+                COUNT(*)                                            AS total_rotas,
+                COUNT(*) FILTER (WHERE is_mitigated)                AS mitigadas,
+                ROUND(100.0 * COUNT(*) FILTER (WHERE is_mitigated) / NULLIF(COUNT(*), 0), 1) AS pct,
+                (
+                    SELECT COALESCE(k2.name, 'AS' || r2.mitigator_asn::text)
+                    FROM bgp_routes r2
+                    LEFT JOIN known_asns k2 ON k2.asn = r2.mitigator_asn
+                    WHERE r2.origin_asn = %s AND r2.is_mitigated AND r2.mitigator_asn IS NOT NULL
+                    GROUP BY k2.name, r2.mitigator_asn
+                    ORDER BY COUNT(*) DESC
+                    LIMIT 1
+                ) AS principal_mitigador
+            FROM bgp_routes
+            WHERE origin_asn = %s
         """,
-        tuple(params_audit + [limite_audit]),
-    )
-
-    if not df_rotas.empty:
-        # Monta mapa ASN → nome para formatar o caminho
-        df_nomes = query("SELECT asn, name FROM known_asns WHERE name IS NOT NULL")
-        nome_map: dict[int, str] = (
-            {int(r.asn): r.name for r in df_nomes.itertuples()}
-            if not df_nomes.empty
-            else {}
+            (asn_sel, asn_sel),
         )
 
-        def _fmt_path(raw: str) -> str:
-            if not raw:
-                return "—"
-            hops = []
-            for part in raw.strip().split():
-                try:
-                    asn = int(part)
-                    label = nome_map.get(asn, f"AS{asn}")
-                    hops.append(label)
-                except ValueError:
-                    hops.append(part)
-            return " → ".join(hops)
+        if not df_kpi.empty:
+            r = df_kpi.iloc[0]
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Prefixos /24", int(r.prefixos) if r.prefixos else 0)
+            k2.metric("Total de rotas", f"{int(r.total_rotas):,}" if r.total_rotas else "0")
+            k3.metric("% mitigado", f"{r.pct}%" if r.pct else "0%")
+            k4.metric("Principal mitigador", r.principal_mitigador or "—")
 
-        df_rotas["caminho"] = df_rotas["as_path"].apply(_fmt_path)
+        st.divider()
 
-        st.dataframe(
-            df_rotas[
-                ["prefixo", "caminho", "communities", "mitigada", "coletada_em"]
-            ].rename(
-                columns={
-                    "prefixo": "Prefixo",
-                    "caminho": "Caminho (AS-PATH)",
-                    "communities": "Communities",
-                    "mitigada": "Mitigada",
-                    "coletada_em": "Coletada em",
-                }
-            ),
-            use_container_width=True,
-            hide_index=True,
+        # ── Prefixos e status de mitigação ────────────────────────────────────
+        st.subheader("Prefixos anunciados")
+        df_prefixos = query(
+            """
+            SELECT
+                prefix::text AS prefixo,
+                COUNT(*) AS coletas,
+                COUNT(*) FILTER (WHERE is_mitigated) AS mitigadas,
+                ROUND(100.0 * COUNT(*) FILTER (WHERE is_mitigated) / NULLIF(COUNT(*), 0), 1) AS pct_mitigacao,
+                COALESCE(
+                    (SELECT k.name FROM known_asns k
+                     WHERE k.asn = (
+                         SELECT mitigator_asn FROM bgp_routes r2
+                         WHERE r2.origin_asn = %s AND r2.prefix = bgp_routes.prefix AND r2.mitigator_asn IS NOT NULL
+                         LIMIT 1
+                     ) LIMIT 1),
+                    '—'
+                ) AS mitigador
+            FROM bgp_routes
+            WHERE origin_asn = %s
+            GROUP BY prefix
+            ORDER BY pct_mitigacao DESC NULLS LAST
+        """,
+            (asn_sel, asn_sel),
         )
-        st.caption(f"{len(df_rotas)} rotas exibidas")
-        csv = (
-            df_rotas[
-                [
-                    "prefixo",
-                    "as_path",
-                    "caminho",
-                    "communities",
-                    "mitigada",
-                    "coletada_em",
-                ]
-            ]
-            .to_csv(index=False)
-            .encode("utf-8")
+
+        if not df_prefixos.empty:
+            chart = (
+                alt.Chart(df_prefixos)
+                .mark_bar()
+                .encode(
+                    x=alt.X("pct_mitigacao:Q", title="% Mitigação", scale=alt.Scale(domain=[0, 100])),
+                    y=alt.Y("prefixo:N", sort="-x", title=""),
+                    color=alt.Color("pct_mitigacao:Q", scale=alt.Scale(scheme="redyellowgreen", reverse=True), legend=None),
+                    tooltip=["prefixo", "coletas", "mitigadas", "pct_mitigacao", "mitigador"],
+                )
+                .properties(height=max(200, len(df_prefixos) * 25))
+            )
+            st.altair_chart(chart, use_container_width=True)
+            st.dataframe(
+                df_prefixos.rename(columns={"prefixo": "Prefixo", "coletas": "Coletas", "mitigadas": "Mitigadas", "pct_mitigacao": "% Mit.", "mitigador": "Mitigador"}),
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.info("Sem rotas coletadas para esta provedora ainda.")
+
+        st.divider()
+
+        # ── Communities ───────────────────────────────────────────────────────
+        st.subheader("Communities BGP observadas")
+        df_comm = query(
+            """
+            SELECT unnest(communities) AS community, COUNT(*) AS freq
+            FROM bgp_routes
+            WHERE origin_asn = %s AND array_length(communities, 1) > 0
+            GROUP BY community
+            ORDER BY freq DESC
+            LIMIT 12
+        """,
+            (asn_sel,),
         )
-        st.download_button(
-            "Exportar CSV", csv, f"auditoria_as{asn_sel}.csv", "text/csv"
+
+        if not df_comm.empty:
+            chart = (
+                alt.Chart(df_comm)
+                .mark_bar(color="#7b61ff")
+                .encode(
+                    x=alt.X("freq:Q", title="Frequência"),
+                    y=alt.Y("community:N", sort="-x", title=""),
+                    tooltip=["community", "freq"],
+                )
+                .properties(height=280)
+            )
+            st.altair_chart(chart, use_container_width=True)
+        else:
+            st.info("Sem communities registradas para esta provedora.")
+
+        st.divider()
+
+        # ── Mapa de calor — prefixo × tempo ──────────────────────────────────
+        st.subheader("Mapa de calor — mitigação por prefixo ao longo do tempo")
+        st.caption("Cada célula representa uma coleta. Vermelho = 100% mitigado, branco = sem mitigação.")
+        df_heat_prov = query(
+            """
+            SELECT
+                prefix::text                                                              AS prefixo,
+                DATE_TRUNC('hour', collected_at)                                          AS hora,
+                ROUND(100.0 * COUNT(*) FILTER (WHERE is_mitigated) / NULLIF(COUNT(*), 0), 1) AS pct
+            FROM bgp_routes
+            WHERE origin_asn = %s
+            GROUP BY prefix, hora
+            ORDER BY hora
+        """,
+            (asn_sel,),
         )
-    else:
-        st.info("Sem rotas para exibir.")
+
+        if not df_heat_prov.empty:
+            df_heat_prov["hora"] = pd.to_datetime(df_heat_prov["hora"])
+            chart = (
+                alt.Chart(df_heat_prov)
+                .mark_rect()
+                .encode(
+                    x=alt.X("hora:T", title="Hora da coleta"),
+                    y=alt.Y("prefixo:N", title=""),
+                    color=alt.Color("pct:Q", scale=alt.Scale(scheme="reds", domain=[0, 100]), legend=alt.Legend(title="% Mitigado")),
+                    tooltip=[
+                        alt.Tooltip("prefixo:N", title="Prefixo"),
+                        alt.Tooltip("hora:T", title="Hora", format="%d/%m %H:%M"),
+                        alt.Tooltip("pct:Q", title="% Mitigado"),
+                    ],
+                )
+                .properties(height=max(150, len(df_heat_prov["prefixo"].unique()) * 30))
+            )
+            st.altair_chart(chart, use_container_width=True)
+        else:
+            st.info("Sem dados suficientes para o mapa de calor.")
+
+        st.divider()
+
+        # ── Auditoria de rotas ────────────────────────────────────────────────
+        st.subheader("Auditoria de rotas")
+        st.caption("Cada linha representa uma rota coletada. O caminho mostra todas as ASNs pelo qual o tráfego passa naquele momento.")
+
+        col_f1, col_f2 = st.columns([2, 1])
+        with col_f1:
+            prefixo_filtro = st.text_input("Filtrar por prefixo", placeholder="Ex: 45.160.192.0/24", key="audit_prefix")
+        with col_f2:
+            limite_audit = st.slider("Máx. linhas", 50, 500, 100, step=50, key="audit_limit")
+
+        where_audit = ["r.origin_asn = %s"]
+        params_audit: list = [asn_sel]
+        if prefixo_filtro.strip():
+            where_audit.append("r.prefix::text LIKE %s")
+            params_audit.append(f"%{prefixo_filtro.strip()}%")
+
+        df_rotas = query(
+            f"""
+            SELECT
+                r.prefix::text   AS prefixo,
+                r.as_path,
+                array_to_string(r.communities, ', ') AS communities,
+                r.is_mitigated   AS mitigada,
+                r.collected_at   AS coletada_em
+            FROM bgp_routes r
+            WHERE {" AND ".join(where_audit)}
+            ORDER BY r.collected_at DESC
+            LIMIT %s
+            """,
+            tuple(params_audit + [limite_audit]),
+        )
+
+        if not df_rotas.empty:
+            df_nomes = query("SELECT asn, name FROM known_asns WHERE name IS NOT NULL")
+            nome_map: dict[int, str] = (
+                {int(r.asn): r.name for r in df_nomes.itertuples()}
+                if not df_nomes.empty else {}
+            )
+
+            def _fmt_path(raw: str) -> str:
+                if not raw:
+                    return "—"
+                hops = []
+                for part in raw.strip().split():
+                    try:
+                        asn = int(part)
+                        label = nome_map.get(asn, f"AS{asn}")
+                        hops.append(label)
+                    except ValueError:
+                        hops.append(part)
+                return " → ".join(hops)
+
+            df_rotas["caminho"] = df_rotas["as_path"].apply(_fmt_path)
+
+            st.dataframe(
+                df_rotas[["prefixo", "caminho", "communities", "mitigada", "coletada_em"]].rename(
+                    columns={"prefixo": "Prefixo", "caminho": "Caminho (AS-PATH)", "communities": "Communities", "mitigada": "Mitigada", "coletada_em": "Coletada em"}
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.caption(f"{len(df_rotas)} rotas exibidas")
+            csv = df_rotas[["prefixo", "as_path", "caminho", "communities", "mitigada", "coletada_em"]].to_csv(index=False).encode("utf-8")
+            st.download_button("Exportar CSV", csv, f"auditoria_as{asn_sel}.csv", "text/csv")
+        else:
+            st.info("Sem rotas para exibir.")
 
 
 # ============================================================================
