@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -53,7 +53,7 @@ def main() -> None:
         args=["run_discover_mitigators", queue],
         id="discover_mitigators",
         name="Descoberta de mitigadores",
-        next_run_time=datetime.utcnow(),
+        next_run_time=datetime.now(timezone.utc),
     )
 
     # Coleta RIPE — dispara nos minutos configurados em COLLECTION_MINUTE
@@ -63,7 +63,7 @@ def main() -> None:
         args=["run_ripe", queue],
         id="ripe",
         name="Coletor RIPE RIS",
-        next_run_time=datetime.utcnow(),
+        next_run_time=datetime.now(timezone.utc),
     )
 
     # Escreve PID para healthcheck do Docker

@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -161,7 +161,7 @@ async def collect_ripe() -> None:
         return
 
     job_id = await create_job(pool, "ripe")
-    collection_ts = datetime.now(datetime.UTC)
+    collection_ts = datetime.now(timezone.utc)
     total_inserted = 0
     error_msg: str | None = None
 
