@@ -2,7 +2,7 @@
 
 Endpoints usados:
   - announced-prefixes: prefixos anunciados por ASN
-  - routing-status:     detalhes de roteamento de um prefixo
+  - bgp-state:          estado BGP completo de um prefixo (AS-PATH + communities)
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ settings = get_settings()
 
 RIPE_STAT_BASE = "https://stat.ripe.net/data"
 RIPE_ANNOUNCED = f"{RIPE_STAT_BASE}/announced-prefixes/data.json"
-RIPE_ROUTING = f"{RIPE_STAT_BASE}/routing-status/data.json"
+RIPE_BGP_STATE = f"{RIPE_STAT_BASE}/bgp-state/data.json"
 
 
 async def _get_with_retry(
@@ -99,58 +99,63 @@ async def _fetch_prefixes_for_asn(client: httpx.AsyncClient, asn: int) -> list[s
     return prefixes
 
 
-async def _fetch_routing_status(
+async def _fetch_bgp_state(
     client: httpx.AsyncClient, prefix: str
 ) -> dict[str, Any] | None:
-    return await _get_with_retry(client, RIPE_ROUTING, {"resource": prefix})
+    return await _get_with_retry(client, RIPE_BGP_STATE, {"resource": prefix})
 
 
-def _extract_routes_from_status(
-    prefix: str, status_data: dict[str, Any], origin_asn: int
+def _extract_routes_from_bgp_state(
+    prefix: str, state_data: dict[str, Any], origin_asn: int
 ) -> list[dict[str, Any]]:
+    """Extrai rotas únicas do bgp-state, incluindo AS-PATH e communities reais."""
     routes: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+
     try:
-        data = status_data.get("data", {})
-        announcing_asns = data.get("announcing_asns", [])
+        bgp_state = state_data.get("data", {}).get("bgp_state", [])
+        for entry in bgp_state:
+            path: list[int] = entry.get("path", [])
+            communities: list[str] = entry.get("community", [])
 
-        for ann in announcing_asns:
-            ann_asn = ann.get("asn") or origin_asn
-            as_path = (
-                f"{ann_asn} {origin_asn}" if ann_asn != origin_asn else str(origin_asn)
-            )
+            if not path:
+                continue
+
+            as_path_str = " ".join(str(a) for a in path)
+            if as_path_str in seen_paths:
+                continue
+            seen_paths.add(as_path_str)
+
             routes.append(
                 {
                     "prefix": prefix,
-                    "origin_asn": origin_asn,
-                    "as_path": as_path,
-                    "communities": [],
+                    "origin_asn": path[-1],
+                    "as_path": as_path_str,
+                    "communities": communities,
                     "source": "ripe",
-                    "raw_data": {
-                        "ripe_status": data,
-                        "announcing_asn": ann_asn,
-                    },
-                }
-            )
-
-        if not announcing_asns:
-            routes.append(
-                {
-                    "prefix": prefix,
-                    "origin_asn": origin_asn,
-                    "as_path": str(origin_asn),
-                    "communities": [],
-                    "source": "ripe",
-                    "raw_data": {"ripe_status": data},
+                    "raw_data": {"bgp_state_entry": entry},
                 }
             )
     except Exception as exc:
-        logger.error("Erro ao extrair rotas de routing-status para %s: %s", prefix, exc)
+        logger.error("Erro ao extrair rotas de bgp-state para %s: %s", prefix, exc)
+
+    if not routes:
+        routes.append(
+            {
+                "prefix": prefix,
+                "origin_asn": origin_asn,
+                "as_path": str(origin_asn),
+                "communities": [],
+                "source": "ripe",
+                "raw_data": {},
+            }
+        )
 
     return routes
 
 
 async def collect_ripe() -> None:
-    """Pipeline: busca prefixos de cada ASN owner → routing-status → limpeza → banco."""
+    """Pipeline: busca prefixos de cada ASN owner → bgp-state (com communities) → limpeza → banco."""
     pool = await get_pool()
     owner_asns = await get_owner_asns(pool)
     mitigator_asns = await get_mitigator_asns(pool)
@@ -178,11 +183,11 @@ async def collect_ripe() -> None:
                     if "/24" not in prefix:
                         continue
 
-                    status_data = await _fetch_routing_status(client, prefix)
+                    status_data = await _fetch_bgp_state(client, prefix)
                     if not status_data:
                         continue
 
-                    raw_routes = _extract_routes_from_status(prefix, status_data, asn)
+                    raw_routes = _extract_routes_from_bgp_state(prefix, status_data, asn)
                     clean = clean_routes(raw_routes, mitigator_asns)
                     if clean:
                         inserted = await upsert_routes(
